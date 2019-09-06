@@ -1,24 +1,24 @@
+import warnings
 import logging
 from pathlib import Path
 
-import logging
-from pathlib import Path
-from typing import List, Union, Optional
-
-import numpy as np
-import torch
 import torch.nn
-import torch.nn.functional as F
-from tabulate import tabulate
 from torch.nn.parameter import Parameter
-from tqdm import tqdm
+import torch.nn.functional as F
 
 import flair.nn
+import torch
+
 from flair.data import Dictionary, Sentence, Token, Label
 from flair.datasets import DataLoader
 from flair.embeddings import TokenEmbeddings
 from flair.file_utils import cached_path
+
+from typing import List, Tuple, Union
+
 from flair.training_utils import Metric, Result, store_embeddings
+
+import numpy as np
 
 log = logging.getLogger("flair")
 
@@ -186,11 +186,9 @@ class SequenceTagger(flair.nn.Model):
             self.transitions = torch.nn.Parameter(
                 torch.randn(self.tagset_size, self.tagset_size)
             )
-
             self.transitions.detach()[
                 self.tag_dictionary.get_idx_for_item(START_TAG), :
             ] = -10000
-
             self.transitions.detach()[
                 :, self.tag_dictionary.get_idx_for_item(STOP_TAG)
             ] = -10000
@@ -261,24 +259,13 @@ class SequenceTagger(flair.nn.Model):
             metric = Metric("Evaluation")
 
             lines: List[str] = []
-
-            if self.use_crf:
-                transitions = self.transitions.detach().cpu().numpy()
-            else:
-                transitions = None
-
             for batch in data_loader:
                 batch_no += 1
 
                 with torch.no_grad():
                     features = self.forward(batch)
                     loss = self._calculate_loss(features, batch)
-                    tags, _ = self._obtain_labels(
-                        feature=features,
-                        batch_sentences=batch,
-                        transitions=transitions,
-                        get_all_tags=False,
-                    )
+                    tags, _ = self._obtain_labels(features, batch)
 
                 eval_loss += loss
 
@@ -363,18 +350,6 @@ class SequenceTagger(flair.nn.Model):
         all_tag_prob: bool = False,
         verbose=False,
     ) -> List[Sentence]:
-        """
-        Predict sequence tags for Named Entity Recognition task
-        :param sentences: a Sentence or a List of Sentence. Empty sentences will be removed.
-        :param mini_batch_size: size of the minibatch, usually bigger is more rapid but consume more memory,
-        up to a point when it has no more effect.
-        :param embedding_storage_mode: 'none' for the minimum memory footprint, 'cpu' to store embeddings in Ram,
-        'gpu' to store embeddings in GPU memory.
-        :param all_tag_prob: True to compute the score for each tag on each token,
-        otherwise only the score of the best tag is returned
-        :param verbose: set to True to display a progress bar
-        :return: List of Sentence enriched by the predicted tags
-        """
         with torch.no_grad():
             if isinstance(sentences, Sentence):
                 sentences = [sentences]
@@ -387,33 +362,22 @@ class SequenceTagger(flair.nn.Model):
             # reverse sort all sequences by their length
             filtered_sentences.sort(key=lambda x: len(x), reverse=True)
 
-            if self.use_crf:
-                transitions = self.transitions.detach().cpu().numpy()
-            else:
-                transitions = None
-
             # make mini-batches
             batches = [
                 filtered_sentences[x : x + mini_batch_size]
                 for x in range(0, len(filtered_sentences), mini_batch_size)
             ]
 
-            # progress bar for verbosity
-            if verbose:
-                batches = tqdm(batches)
-
             for i, batch in enumerate(batches):
 
                 if verbose:
                     batches.set_description(f"Inferencing on batch {i}")
 
-                feature: torch.Tensor = self.forward(batch)
-                tags, all_tags = self._obtain_labels(
-                    feature=feature,
-                    batch_sentences=batch,
-                    transitions=transitions,
-                    get_all_tags=all_tag_prob,
-                )
+                with torch.no_grad():
+                    feature = self.forward(batch)
+                    tags, all_tags = self._obtain_labels(
+                        feature, batch, get_all_tags=all_tag_prob
+                    )
 
                 for (sentence, sent_tags) in zip(batch, tags):
                     for (token, tag) in zip(sentence.tokens, sent_tags):
@@ -455,7 +419,7 @@ class SequenceTagger(flair.nn.Model):
             )
 
         # TODO: this can only be removed once the implementations of word_dropout and locked_dropout have a batch_first mode
-        sentence_tensor = sentence_tensor.transpose(0, 1)
+        sentence_tensor = sentence_tensor.transpose_(0, 1)
 
         # --------------------------------------------------------------------
         # FF PART
@@ -498,7 +462,7 @@ class SequenceTagger(flair.nn.Model):
                 sentence_tensor = self.locked_dropout(sentence_tensor)
         else:
             # transpose to batch_first mode
-            sentence_tensor = sentence_tensor.transpose(0, 1)
+            sentence_tensor = sentence_tensor.transpose_(0, 1)
 
         features = self.linear(sentence_tensor)
 
@@ -579,11 +543,7 @@ class SequenceTagger(flair.nn.Model):
             return score
 
     def _obtain_labels(
-        self,
-        feature: torch.Tensor,
-        batch_sentences: List[Sentence],
-        transitions: Optional[np.ndarray],
-        get_all_tags: bool,
+        self, feature, sentences, get_all_tags: bool = False
     ) -> (List[List[Label]], List[List[List[Label]]]):
         """
         Returns a tuple of two lists:
@@ -592,32 +552,26 @@ class SequenceTagger(flair.nn.Model):
            in a sentence for all sentences.
         """
 
-        lengths: List[int] = [len(sentence.tokens) for sentence in batch_sentences]
+        lengths: List[int] = [len(sentence.tokens) for sentence in sentences]
 
         tags = []
         all_tags = []
-        feature = feature.cpu()
-        if self.use_crf:
-            feature = feature.numpy()
-        else:
-            for index, length in enumerate(lengths):
-                feature[index, length:] = 0
-            softmax_batch = F.softmax(feature, dim=2).cpu()
-            scores_batch, prediction_batch = torch.max(softmax_batch, dim=2)
-            feature = zip(softmax_batch, scores_batch, prediction_batch)
-
         for feats, length in zip(feature, lengths):
             if self.use_crf:
                 confidences, tag_seq, scores = self._viterbi_decode(
-                    feats=feats[:length],
-                    transitions=transitions,
-                    all_scores=get_all_tags,
+                    feats[:length], all_scores=get_all_tags
                 )
             else:
-                softmax, score, prediction = feats
-                confidences = score[:length].tolist()
-                tag_seq = prediction[:length].tolist()
-                scores = softmax[:length].tolist()
+                tag_seq = []
+                confidences = []
+                scores = []
+                for backscore in feats[:length]:
+                    softmax = F.softmax(backscore, dim=0)
+                    _, idx = torch.max(backscore, 0)
+                    prediction = idx.item()
+                    tag_seq.append(prediction)
+                    confidences.append(softmax[prediction].item())
+                    scores.append(softmax.tolist())
 
             tags.append(
                 [
@@ -641,80 +595,76 @@ class SequenceTagger(flair.nn.Model):
 
         return tags, all_tags
 
-    @staticmethod
-    def _softmax(x, axis):
-        # reduce raw values to avoid NaN during exp
-        x_norm = x - x.max(axis=axis, keepdims=True)
-        y = np.exp(x_norm)
-        return y / y.sum(axis=axis, keepdims=True)
+    def _viterbi_decode(self, feats, all_scores: bool = False):
+        backpointers = []
+        backscores = []
 
-    def _viterbi_decode(
-        self, feats: np.ndarray, transitions: np.ndarray, all_scores: bool
-    ):
-        id_start = self.tag_dictionary.get_idx_for_item(START_TAG)
-        id_stop = self.tag_dictionary.get_idx_for_item(STOP_TAG)
-
-        backpointers = np.empty(shape=(feats.shape[0], self.tagset_size), dtype=np.int_)
-        backscores = np.empty(
-            shape=(feats.shape[0], self.tagset_size), dtype=np.float32
+        init_vvars = (
+            torch.FloatTensor(1, self.tagset_size).to(flair.device).fill_(-10000.0)
         )
-
-        init_vvars = np.expand_dims(
-            np.repeat(-10000.0, self.tagset_size), axis=0
-        ).astype(np.float32)
-        init_vvars[0][id_start] = 0
-
+        init_vvars[0][self.tag_dictionary.get_idx_for_item(START_TAG)] = 0
         forward_var = init_vvars
-        for index, feat in enumerate(feats):
-            # broadcasting will do the job of reshaping and is more efficient than calling repeat
-            next_tag_var = forward_var + transitions
-            bptrs_t = next_tag_var.argmax(axis=1)
-            viterbivars_t = next_tag_var[np.arange(bptrs_t.shape[0]), bptrs_t]
-            forward_var = viterbivars_t + feat
-            backscores[index] = forward_var
-            forward_var = forward_var[np.newaxis, :]
-            backpointers[index] = bptrs_t
 
-        terminal_var = forward_var.squeeze() + transitions[id_stop]
-        terminal_var[id_stop] = -10000.0
-        terminal_var[id_start] = -10000.0
-        best_tag_id = terminal_var.argmax()
+        for feat in feats:
+            next_tag_var = (
+                forward_var.view(1, -1).expand(self.tagset_size, self.tagset_size)
+                + self.transitions
+            )
+            _, bptrs_t = torch.max(next_tag_var, dim=1)
+            viterbivars_t = next_tag_var[range(len(bptrs_t)), bptrs_t]
+            forward_var = viterbivars_t + feat
+            backscores.append(forward_var)
+            backpointers.append(bptrs_t)
+
+        terminal_var = (
+            forward_var
+            + self.transitions[self.tag_dictionary.get_idx_for_item(STOP_TAG)]
+        )
+        terminal_var.detach()[self.tag_dictionary.get_idx_for_item(STOP_TAG)] = -10000.0
+        terminal_var.detach()[
+            self.tag_dictionary.get_idx_for_item(START_TAG)
+        ] = -10000.0
+        best_tag_id = argmax(terminal_var.unsqueeze(0))
 
         best_path = [best_tag_id]
+
         for bptrs_t in reversed(backpointers):
             best_tag_id = bptrs_t[best_tag_id]
             best_path.append(best_tag_id)
 
+        best_scores = []
+        for backscore in backscores:
+            softmax = F.softmax(backscore, dim=0)
+            _, idx = torch.max(backscore, 0)
+            prediction = idx.item()
+            best_scores.append(softmax[prediction].item())
+
         start = best_path.pop()
-        assert start == id_start
+        assert start == self.tag_dictionary.get_idx_for_item(START_TAG)
         best_path.reverse()
 
-        best_scores_softmax = self._softmax(backscores, axis=1)
-        best_scores_np = np.max(best_scores_softmax, axis=1)
-
-        # default value
-        all_scores_np = np.zeros(0, dtype=np.float64)
+        scores = []
+        # return all scores if so selected
         if all_scores:
-            all_scores_np = best_scores_softmax
-            for index, (tag_id, tag_scores) in enumerate(zip(best_path, all_scores_np)):
-                if type(tag_id) != int and tag_id.item() != tag_scores.argmax():
-                    swap_index_score = tag_scores.argmax()
-                    all_scores_np[index][tag_id.item()], all_scores_np[index][
-                        swap_index_score
-                    ] = (
-                        all_scores_np[index][swap_index_score],
-                        all_scores_np[index][tag_id.item()],
+            for backscore in backscores:
+                softmax = F.softmax(backscore, dim=0)
+                scores.append([elem.item() for elem in softmax.flatten()])
+
+            for index, (tag_id, tag_scores) in enumerate(zip(best_path, scores)):
+                if type(tag_id) != int and tag_id.item() != np.argmax(tag_scores):
+                    swap_index_score = np.argmax(tag_scores)
+                    scores[index][tag_id.item()], scores[index][swap_index_score] = (
+                        scores[index][swap_index_score],
+                        scores[index][tag_id.item()],
                     )
-                elif type(tag_id) == int and tag_id != tag_scores.argmax():
-                    swap_index_score = tag_scores.argmax()
-                    all_scores_np[index][tag_id], all_scores_np[index][
-                        swap_index_score
-                    ] = (
-                        all_scores_np[index][swap_index_score],
-                        all_scores_np[index][tag_id],
+                elif type(tag_id) == int and tag_id != np.argmax(tag_scores):
+                    swap_index_score = np.argmax(tag_scores)
+                    scores[index][tag_id], scores[index][swap_index_score] = (
+                        scores[index][swap_index_score],
+                        scores[index][tag_id],
                     )
 
-        return best_scores_np.tolist(), best_path, all_scores_np.tolist()
+        return best_scores, best_path, scores
 
     def _forward_alg(self, feats, lens_):
 
@@ -941,4 +891,3 @@ class SequenceTagger(flair.nn.Model):
                 ]
                 data.append(row)
             data.append(["----"])
-        print(tabulate(data, headers=["FROM", "TO", "SCORE"]))

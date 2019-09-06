@@ -1,19 +1,16 @@
 from abc import abstractmethod
 from typing import List, Dict, Union
 
-import torch, flair
+import torch
+import flair
 import logging
 
 from collections import Counter
 from collections import defaultdict
 
-from segtok.segmenter import split_single
-from segtok.tokenizer import split_contractions
-from segtok.tokenizer import word_tokenizer
 from torch.utils.data import Dataset, random_split
 from torch.utils.data.dataset import ConcatDataset, Subset
 
-from flair.file_utils import Tqdm
 
 log = logging.getLogger("flair")
 
@@ -159,26 +156,6 @@ class DataPoint:
     @abstractmethod
     def clear_embeddings(self, embedding_names: List[str] = None):
         pass
-
-
-class DataPair(DataPoint):
-    def __init__(self, first: DataPoint, second: DataPoint):
-        self.first = first
-        self.second = second
-
-    def to(self, device: str):
-        self.first.to(device)
-        self.second.to(device)
-
-    def clear_embeddings(self, embedding_names: List[str] = None):
-        self.first.clear_embeddings(embedding_names)
-        self.second.clear_embeddings(embedding_names)
-
-    def embedding(self):
-        return torch.cat([self.first.embedding, self.second.embedding])
-
-    def __str__(self):
-        return f"DataPoint:\n first: {self.first}\n second: {self.second}"
 
 
 class Token(DataPoint):
@@ -385,61 +362,23 @@ class Sentence(DataPoint):
         # if text is passed, instantiate sentence with tokens (words)
         if text is not None:
 
-            # tokenize the text first if option selected
-            if use_tokenizer:
+            # add each word in tokenized string as Token object to Sentence
+            word = ""
+            index = -1
+            for index, char in enumerate(text):
+                if char == " ":
+                    if len(word) > 0:
+                        token = Token(word, start_position=index - len(word))
+                        self.add_token(token)
 
-                # use segtok for tokenization
-                tokens = []
-                sentences = split_single(text)
-                for sentence in sentences:
-                    contractions = split_contractions(word_tokenizer(sentence))
-                    tokens.extend(contractions)
-
-                # determine offsets for whitespace_after field
-                index = text.index
-                running_offset = 0
-                last_word_offset = -1
-                last_token = None
-                for word in tokens:
-                    try:
-                        word_offset = index(word, running_offset)
-                        start_position = word_offset
-                    except:
-                        word_offset = last_word_offset + 1
-                        start_position = (
-                            running_offset + 1 if running_offset > 0 else running_offset
-                        )
-
-                    token = Token(word, start_position=start_position)
-                    self.add_token(token)
-
-                    if word_offset - 1 == last_word_offset and last_token is not None:
-                        last_token.whitespace_after = False
-
-                    word_len = len(word)
-                    running_offset = word_offset + word_len
-                    last_word_offset = running_offset - 1
-                    last_token = token
-
-            # otherwise assumes whitespace tokenized text
-            else:
-                # add each word in tokenized string as Token object to Sentence
-                word = ""
-                index = -1
-                for index, char in enumerate(text):
-                    if char == " ":
-                        if len(word) > 0:
-                            token = Token(word, start_position=index - len(word))
-                            self.add_token(token)
-
-                        word = ""
-                    else:
-                        word += char
-                # increment for last token in sentence if not followed by whtespace
-                index += 1
-                if len(word) > 0:
-                    token = Token(word, start_position=index - len(word))
-                    self.add_token(token)
+                    word = ""
+                else:
+                    word += char
+            # increment for last token in sentence if not followed by whtespace
+            index += 1
+            if len(word) > 0:
+                token = Token(word, start_position=index - len(word))
+                self.add_token(token)
 
         # log a warning if the dataset is empty
         if text == "":
@@ -752,60 +691,9 @@ class Sentence(DataPoint):
 
     def get_language_code(self) -> str:
         if self.language_code is None:
-            import langdetect
-
-            try:
-                self.language_code = langdetect.detect(self.to_plain_string())
-            except:
-                self.language_code = "en"
+            self.language_code = "en"
 
         return self.language_code
-
-
-class Image(DataPoint):
-    def __init__(self, data=None, imageURL=None):
-        self.data = data
-        self._embeddings: Dict = {}
-        self.imageURL = imageURL
-
-    @property
-    def embedding(self):
-        return self.get_embedding()
-
-    def __str__(self):
-
-        image_repr = self.data.size() if self.data else ""
-        image_url = self.imageURL if self.imageURL else ""
-
-        return f"Image: {image_repr} {image_url}"
-
-    def get_embedding(self) -> torch.tensor:
-        embeddings = [
-            self._embeddings[embed] for embed in sorted(self._embeddings.keys())
-        ]
-
-        if embeddings:
-            return torch.cat(embeddings, dim=0)
-
-        return torch.tensor([], device=flair.device)
-
-    def set_embedding(self, name: str, vector: torch.tensor):
-        device = flair.device
-        if len(self._embeddings.keys()) > 0:
-            device = next(iter(self._embeddings.values())).device
-        self._embeddings[name] = vector.to(device, non_blocking=True)
-
-    def to(self, device: str):
-        for name, vector in self._embeddings.items():
-            self._embeddings[name] = vector.to(device, non_blocking=True)
-
-    def clear_embeddings(self, embedding_names: List[str] = None):
-        if embedding_names is None:
-            self._embeddings: Dict = {}
-        else:
-            for name in embedding_names:
-                if name in self._embeddings.keys():
-                    del self._embeddings[name]
 
 
 class FlairDataset(Dataset):
@@ -1011,10 +899,8 @@ class Corpus:
         loader = DataLoader(self.train, batch_size=1)
 
         log.info("Computing label dictionary. Progress:")
-        for batch in Tqdm.tqdm(iter(loader)):
-
+        for batch in iter(loader):
             for sentence in batch:
-
                 for label in sentence.labels:
                     label_dictionary.add_item(label.value)
 

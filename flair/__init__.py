@@ -1,25 +1,22 @@
+from pathlib import Path
+
 import torch
 import os
 
 # global variable: cache_root
-cache_root = os.path.expanduser(os.path.join("~", ".flair"))
+cache_root = Path(__file__).resolve().parent
 
 # global variable: device
 device = None
-if torch.cuda.is_available():
-    device = torch.device("cuda:0")
-else:
-    device = torch.device("cpu")
+device = torch.device("cpu")
 
 from . import data
 from . import models
-from . import visual
-from . import trainers
 from . import nn
 
 import logging.config
 
-__version__ = "0.4.3"
+__version__ = "0.1.0"
 
 logging.config.dictConfig(
     {
@@ -37,6 +34,7 @@ logging.config.dictConfig(
         "loggers": {
             "flair": {"handlers": ["console"], "level": "INFO", "propagate": False}
         },
+        "root": {"handlers": ["console"], "level": "WARNING"},
     }
 )
 

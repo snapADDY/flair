@@ -5,8 +5,6 @@ import logging
 from enum import Enum
 from pathlib import Path
 
-from deprecated import deprecated
-
 import flair
 from flair.data import Sentence, Corpus, Token, MultiCorpus
 from flair.file_utils import cached_path
@@ -110,7 +108,6 @@ class NLPTask(Enum):
 
 class NLPTaskDataFetcher:
     @staticmethod
-    @deprecated(version="0.4.1", reason="Use 'flair.datasets' instead.")
     def load_corpora(
         tasks: List[Union[NLPTask, str]], base_path: Path = None
     ) -> MultiCorpus:
@@ -119,7 +116,6 @@ class NLPTaskDataFetcher:
         )
 
     @staticmethod
-    @deprecated(version="0.4.1", reason="Use 'flair.datasets' instead.")
     def load_corpus(task: Union[NLPTask, str], base_path: [str, Path] = None) -> Corpus:
         """
         Helper function to fetch a Corpus for a specific NLPTask. For this to work you need to first download
@@ -247,7 +243,6 @@ class NLPTaskDataFetcher:
             )
 
     @staticmethod
-    @deprecated(version="0.4.1", reason="Use 'flair.datasets' instead.")
     def load_column_corpus(
         data_folder: Union[str, Path],
         column_format: Dict[int, str],
@@ -348,7 +343,6 @@ class NLPTaskDataFetcher:
         )
 
     @staticmethod
-    @deprecated(version="0.4.1", reason="Use 'flair.datasets' instead.")
     def load_ud_corpus(
         data_folder: Union[str, Path], train_file=None, test_file=None, dev_file=None
     ) -> Corpus:
@@ -390,7 +384,6 @@ class NLPTaskDataFetcher:
         )
 
     @staticmethod
-    @deprecated(version="0.4.1", reason="Use 'flair.datasets' instead.")
     def load_classification_corpus(
         data_folder: Union[str, Path],
         train_file=None,
@@ -472,7 +465,6 @@ class NLPTaskDataFetcher:
         return Corpus(sentences_train, sentences_dev, sentences_test)
 
     @staticmethod
-    @deprecated(version="0.4.1", reason="Use 'flair.datasets' instead.")
     def read_text_classification_file(
         path_to_file: Union[str, Path], max_tokens_per_doc=-1, use_tokenizer=True
     ) -> List[Sentence]:
@@ -518,7 +510,6 @@ class NLPTaskDataFetcher:
         return sentences
 
     @staticmethod
-    @deprecated(version="0.4.1", reason="Use 'flair.datasets' instead.")
     def read_column_data(
         path_to_column_file: Path,
         column_name_map: Dict[int, str],
@@ -585,7 +576,6 @@ class NLPTaskDataFetcher:
         return sentences
 
     @staticmethod
-    @deprecated(version="0.4.1", reason="Use 'flair.datasets' instead.")
     def read_conll_ud(path_to_conll_file: Path) -> List[Sentence]:
         """
        Reads a file in CoNLL-U format and produces a list of Sentence with full morphosyntactic annotation

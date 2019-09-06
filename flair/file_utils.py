@@ -16,7 +16,6 @@ import requests
 import zipfile
 import io
 
-# from allennlp.common.tqdm import Tqdm
 import flair
 
 logger = logging.getLogger("flair")
@@ -29,9 +28,9 @@ def load_big_file(f):
     :return:
     """
     logger.info(f"loading file {f}")
-    with open(f, "r+b") as f_in:
+    with open(f, "rb") as f_in:
         # mmap seems to be much more memory efficient
-        bf = mmap.mmap(f_in.fileno(), 0)
+        bf = mmap.mmap(f_in.fileno(), 0, prot=mmap.PROT_READ)
         f_in.close()
     return bf
 
@@ -100,6 +99,7 @@ def cached_path(url_or_filename: str, cache_dir: Path) -> Path:
 
 
 def unzip_file(file: Path, unzip_to: Path):
+    # unpack and write out in CoNLL column-like format
     from zipfile import ZipFile
 
     with ZipFile(file, "r") as zipObj:
@@ -124,22 +124,16 @@ def download_file(url: str, cache_dir: Path):
     req = requests.get(url, stream=True)
     content_length = req.headers.get("Content-Length")
     total = int(content_length) if content_length is not None else None
-    progress = Tqdm.tqdm(unit="B", total=total)
     with open(temp_filename, "wb") as temp_file:
         for chunk in req.iter_content(chunk_size=1024):
             if chunk:  # filter out keep-alive new chunks
-                progress.update(len(chunk))
                 temp_file.write(chunk)
-
-    progress.close()
 
     logger.info("copying %s to cache at %s", temp_filename, cache_path)
     shutil.copyfile(temp_filename, str(cache_path))
     logger.info("removing temp file %s", temp_filename)
     os.close(fd)
     os.remove(temp_filename)
-
-    progress.close()
 
 
 # TODO(joelgrus): do we want to do checksums or anything like that?
@@ -176,14 +170,11 @@ def get_from_cache(url: str, cache_dir: Path = None) -> Path:
         req = requests.get(url, stream=True, headers={"User-Agent": "Flair"})
         content_length = req.headers.get("Content-Length")
         total = int(content_length) if content_length is not None else None
-        progress = Tqdm.tqdm(unit="B", total=total)
         with open(temp_filename, "wb") as temp_file:
             for chunk in req.iter_content(chunk_size=1024):
                 if chunk:  # filter out keep-alive new chunks
-                    progress.update(len(chunk))
                     temp_file.write(chunk)
 
-        progress.close()
 
         logger.info("copying %s to cache at %s", temp_filename, cache_path)
         shutil.copyfile(temp_filename, str(cache_path))
@@ -233,34 +224,3 @@ def format_embeddings_file_uri(
     if path_inside_archive:
         return "({})#{}".format(main_file_path_or_url, path_inside_archive)
     return main_file_path_or_url
-
-
-from tqdm import tqdm as _tqdm
-
-
-class Tqdm:
-    # These defaults are the same as the argument defaults in tqdm.
-    default_mininterval: float = 0.1
-
-    @staticmethod
-    def set_default_mininterval(value: float) -> None:
-        Tqdm.default_mininterval = value
-
-    @staticmethod
-    def set_slower_interval(use_slower_interval: bool) -> None:
-        """
-        If ``use_slower_interval`` is ``True``, we will dramatically slow down ``tqdm's`` default
-        output rate.  ``tqdm's`` default output rate is great for interactively watching progress,
-        but it is not great for log files.  You might want to set this if you are primarily going
-        to be looking at output through log files, not the terminal.
-        """
-        if use_slower_interval:
-            Tqdm.default_mininterval = 10.0
-        else:
-            Tqdm.default_mininterval = 0.1
-
-    @staticmethod
-    def tqdm(*args, **kwargs):
-        new_kwargs = {"mininterval": Tqdm.default_mininterval, **kwargs}
-
-        return _tqdm(*args, **new_kwargs)

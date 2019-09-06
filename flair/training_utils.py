@@ -7,12 +7,11 @@ from pathlib import Path
 from typing import List
 from flair.data import Dictionary, Sentence
 from functools import reduce
-from sklearn.metrics import mean_squared_error, mean_absolute_error
 from scipy.stats import pearsonr, spearmanr
 from abc import abstractmethod
 
 
-class Result(object):
+class Result:
     def __init__(
         self, main_score: float, log_header: str, log_line: str, detailed_results: str
     ):
@@ -22,7 +21,7 @@ class Result(object):
         self.detailed_results: str = detailed_results
 
 
-class Metric(object):
+class Metric:
     def __init__(self, name):
         self.name = name
 
@@ -186,60 +185,6 @@ class Metric(object):
         return "\n".join(all_lines)
 
 
-class MetricRegression(object):
-    def __init__(self, name):
-        self.name = name
-
-        self.true = []
-        self.pred = []
-
-    def mean_squared_error(self):
-        return mean_squared_error(self.true, self.pred)
-
-    def mean_absolute_error(self):
-        return mean_absolute_error(self.true, self.pred)
-
-    def pearsonr(self):
-        return pearsonr(self.true, self.pred)[0]
-
-    def spearmanr(self):
-        return spearmanr(self.true, self.pred)[0]
-
-    ## dummy return to fulfill trainer.train() needs
-    def micro_avg_f_score(self):
-        return self.mean_squared_error()
-
-    def to_tsv(self):
-        return "{}\t{}\t{}\t{}".format(
-            self.mean_squared_error(),
-            self.mean_absolute_error(),
-            self.pearsonr(),
-            self.spearmanr(),
-        )
-
-    @staticmethod
-    def tsv_header(prefix=None):
-        if prefix:
-            return "{0}_MEAN_SQUARED_ERROR\t{0}_MEAN_ABSOLUTE_ERROR\t{0}_PEARSON\t{0}_SPEARMAN".format(
-                prefix
-            )
-
-        return "MEAN_SQUARED_ERROR\tMEAN_ABSOLUTE_ERROR\tPEARSON\tSPEARMAN"
-
-    @staticmethod
-    def to_empty_tsv():
-        return "\t_\t_\t_\t_"
-
-    def __str__(self):
-        line = "mean squared error: {0:.4f} - mean absolute error: {1:.4f} - pearson: {2:.4f} - spearman: {3:.4f}".format(
-            self.mean_squared_error(),
-            self.mean_absolute_error(),
-            self.pearsonr(),
-            self.spearmanr(),
-        )
-        return line
-
-
 class EvaluationMetric(Enum):
     MICRO_ACCURACY = "micro-average accuracy"
     MICRO_F1_SCORE = "micro-average f1-score"
@@ -248,7 +193,7 @@ class EvaluationMetric(Enum):
     MEAN_SQUARED_ERROR = "mean squared error"
 
 
-class WeightExtractor(object):
+class WeightExtractor:
     def __init__(self, directory: Path, number_of_weights: int = 10):
         self.weights_file = init_output_file(directory, "weights.txt")
         self.weights_dict = defaultdict(lambda: defaultdict(lambda: list()))
@@ -330,7 +275,7 @@ def log_line(log):
 
 def add_file_handler(log, output_file):
     init_output_file(output_file.parents[0], output_file.name)
-    fh = logging.FileHandler(output_file, mode="w", encoding="utf-8")
+    fh = logging.FileHandler(output_file, mode='w', encoding='utf-8')
     fh.setLevel(logging.INFO)
     formatter = logging.Formatter("%(asctime)-15s %(message)s")
     fh.setFormatter(formatter)
@@ -349,10 +294,9 @@ def store_embeddings(sentences: List[Sentence], storage_mode: str):
     else:
         # find out which ones are dynamic embeddings
         delete_keys = []
-        if type(sentences[0]) == Sentence:
-            for name, vector in sentences[0][0]._embeddings.items():
-                if sentences[0][0]._embeddings[name].requires_grad:
-                    delete_keys.append(name)
+        for name, vector in sentences[0][0]._embeddings.items():
+            if sentences[0][0]._embeddings[name].requires_grad:
+                delete_keys.append(name)
 
         # find out which ones are dynamic embeddings
         for sentence in sentences:
